@@ -2,4 +2,4 @@ python-telegram-bot==20.7
 aiohttp
 asyncpg==0.29.0
 python-dotenv
-sys
+
