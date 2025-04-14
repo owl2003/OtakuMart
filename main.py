@@ -415,51 +415,45 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ حدث خطأ غير متوقع. يرجى المحاولة لاحقاً.")
 
 async def main():
-    """Main application entry point"""
-    # Initialize database connection pool
+    # Create DB pool
     db_pool = await init_db()
-    
-    # Create application
-    application = ApplicationBuilder().token(TOKEN).build()
-    
-    # Store db_pool in bot_data for access in handlers
+
+    # Build bot application
+    application = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .build()
+    )
+
+    # Store DB pool in bot_data
     application.bot_data['db_pool'] = db_pool
-    
-    # Register handlers
+
+    # Handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("admin_orders", admin_orders))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(CallbackQueryHandler(browse_products, pattern="^browse$"))
     application.add_handler(CallbackQueryHandler(show_product, pattern="^product_"))
     application.add_handler(CallbackQueryHandler(add_to_cart, pattern="^add_"))
     application.add_handler(CallbackQueryHandler(view_cart, pattern="^my_orders$"))
     application.add_handler(CallbackQueryHandler(confirm_order, pattern="^confirm_order$"))
-    application.add_handler(CallbackQueryHandler(clear_cart, pattern="^clear_cart$"))
-    application.add_handler(CallbackQueryHandler(back_to_start, pattern="^back_start$"))
-    application.add_error_handler(error_handler)
+
+    # Start bot
+    await application.initialize()
+    await application.start()
+    logger.info("Bot started...")
 
     try:
-        # Run the bot until Ctrl-C is pressed
-        await application.run_polling()
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped by user")
+        await application.updater.start_polling()
+        await application.updater.wait()
     finally:
-        # Clean up resources
+        # Clean shutdown
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+
+        # Close the DB pool safely
         await db_pool.close()
         logger.info("Database connection pool closed")
 
-def run_bot():
-    """Run the bot with proper event loop handling"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    try:
-        loop.run_until_complete(main())
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-    finally:
-        if not loop.is_closed():
-            loop.close()
-
-if __name__ == '__main__':
-    run_bot()
+if __name__ == "__main__":
+    asyncio.run(main())
