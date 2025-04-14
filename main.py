@@ -1,6 +1,7 @@
 import asyncpg
 import logging
 import asyncio
+import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, 
@@ -462,6 +463,8 @@ class TelegramBot:
         await self.initialize()
         await self.application.run_polling()
 
+
+
 async def main():
     """Main entry point"""
     bot = TelegramBot()
@@ -469,7 +472,21 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        if sys.platform.startswith('win') and sys.version_info >= (3, 8):
+            # For Windows-specific event loop policy
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+        # Check if an event loop is already running
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Run main in already running event loop
+                loop.create_task(main())
+            else:
+                asyncio.run(main())
+        except RuntimeError:
+            # If no event loop exists, create one and run
+            asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
