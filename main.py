@@ -35,6 +35,7 @@ class TelegramBot:
     async def initialize(self):
         """Initialize the bot application"""
         try:
+            # Initialize database pool first
             self.db_pool = await asyncpg.create_pool(
                 DB_URL,
                 min_size=5,
@@ -42,13 +43,18 @@ class TelegramBot:
                 command_timeout=60
             )
             
+            # Create application with persistent data
             self.application = (
                 ApplicationBuilder()
                 .token(TOKEN)
                 .post_init(self._post_init)
                 .post_shutdown(self._post_shutdown)
+                .persistent(True)  # Enable persistent data
                 .build()
             )
+            
+            # Store db_pool in bot_data before registering handlers
+            self.application.bot_data['db_pool'] = self.db_pool
             
             self._register_handlers()
             await self.application.initialize()
@@ -64,6 +70,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("admin_orders", self.admin_orders))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
         
+        # Callback handlers
         self.application.add_handler(CallbackQueryHandler(self.browse_products, pattern="^browse$"))
         self.application.add_handler(CallbackQueryHandler(self.show_product, pattern="^product_"))
         self.application.add_handler(CallbackQueryHandler(self.add_to_cart, pattern="^add_"))
@@ -72,12 +79,15 @@ class TelegramBot:
         self.application.add_handler(CallbackQueryHandler(self.clear_cart, pattern="^clear_cart$"))
         self.application.add_handler(CallbackQueryHandler(self.back_to_start, pattern="^back_start$"))
         
+        # Error handler
         self.application.add_error_handler(self.error_handler)
 
     async def _post_init(self, application):
         """Run after bot is initialized"""
         logger.info("Post-init completed")
-        application.bot_data['db_pool'] = self.db_pool
+        # Ensure db_pool is available in bot_data
+        if 'db_pool' not in application.bot_data:
+            application.bot_data['db_pool'] = self.db_pool
 
     async def _post_shutdown(self, application):
         """Run after bot is shutdown"""
@@ -86,49 +96,16 @@ class TelegramBot:
             await self.db_pool.close()
             logger.info("Database connection pool closed")
 
-    async def run(self):
-        """Run the bot application"""
-        if not await self.initialize():
-            return
-
-        self.running = True
-        try:
-            await self.application.start()
-            logger.info("Bot started, beginning polling...")
-            await self.application.updater.start_polling()
-            
-            # Keep the application running
-            while self.running:
-                await asyncio.sleep(1)
-                
-        except (KeyboardInterrupt, SystemExit):
-            logger.info("Received stop signal, shutting down...")
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-        finally:
-            await self.shutdown()
-
-    async def shutdown(self):
-        """Cleanup resources"""
-        if not self.running:
-            return
-
-        self.running = False
-        try:
-            if self.application:
-                if self.application.updater and self.application.updater.running:
-                    await self.application.updater.stop()
-                await self.application.stop()
-                await self.application.shutdown()
-                logger.info("Application shutdown complete")
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
-
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start command handler"""
         user = update.effective_user
         try:
-            async with context.bot_data['db_pool'].acquire() as conn:
+            # Get db_pool from context.bot_data
+            db_pool = context.bot_data.get('db_pool')
+            if not db_pool:
+                raise ValueError("Database connection pool not available")
+                
+            async with db_pool.acquire() as conn:
                 user_exists = await conn.fetchval(
                     "SELECT 1 FROM users WHERE telegram_id = $1", 
                     user.id
@@ -150,7 +127,6 @@ class TelegramBot:
                 "مرحباً بك مجدداً! ✨",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle all text messages"""
         user = update.effective_user
@@ -495,6 +471,44 @@ class TelegramBot:
         if update and hasattr(update, 'message'):
             await update.message.reply_text("❌ حدث خطأ غير متوقع. يرجى المحاولة لاحقاً.")
 
+async def run(self):
+        """Run the bot application"""
+        if not await self.initialize():
+            return
+
+        self.running = True
+        try:
+            await self.application.start()
+            logger.info("Bot started, beginning polling...")
+            await self.application.updater.start_polling()
+            
+            # Keep the application running
+            while self.running:
+                await asyncio.sleep(1)
+                
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Received stop signal, shutting down...")
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+        finally:
+            await self.shutdown()
+
+    async def shutdown(self):
+        """Cleanup resources"""
+        if not self.running:
+            return
+
+        self.running = False
+        try:
+            if self.application:
+                if self.application.updater and self.application.updater.running:
+                    await self.application.updater.stop()
+                await self.application.stop()
+                await self.application.shutdown()
+                logger.info("Application shutdown complete")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
+
 async def main():
     """Main entry point"""
     bot = TelegramBot()
@@ -507,3 +521,4 @@ if __name__ == '__main__':
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
+
