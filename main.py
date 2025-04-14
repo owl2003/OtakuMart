@@ -471,7 +471,7 @@ class TelegramBot:
         if update and hasattr(update, 'message'):
             await update.message.reply_text("❌ حدث خطأ غير متوقع. يرجى المحاولة لاحقاً.")
 
-async def run(self):
+    async def run(self):
         """Run the bot application"""
         if not await self.initialize():
             return
