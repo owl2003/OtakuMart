@@ -2,7 +2,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 import os
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")  # اضبطه في البيئة (لا تضعه في الكود مباشرة!)
+TOKEN = os.getenv("7355667192:AAG71GZ5n_yK64KGIXEmFfeArzQ3rDfStbU")  # اضبطه في البيئة (لا تضعه في الكود مباشرة!)
 
 # قاعدة بيانات المنتجات (بالعربية)
 products = {
