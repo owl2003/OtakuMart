@@ -31,24 +31,33 @@ class TelegramBot:
     def __init__(self):
         self.db_pool = None
         self.application = None
+        self.running = False  # Add this line
 
     async def initialize(self):
         """Initialize the bot application"""
-        self.db_pool = await asyncpg.create_pool(
-            DB_URL,
-            min_size=5,
-            max_size=20,
-            command_timeout=60
-        )
-        
-        self.application = (
-            ApplicationBuilder()
-            .token(TOKEN)
-            .post_init(self.post_init)
-            .post_shutdown(self.post_shutdown)
-            .build()
-        )
-        self._register_handlers()
+        try:  # Add try-except block
+            self.db_pool = await asyncpg.create_pool(
+                DB_URL,
+                min_size=5,
+                max_size=20,
+                command_timeout=60
+            )
+            
+            self.application = (
+                ApplicationBuilder()
+                .token(TOKEN)
+                .post_init(self._post_init)  # Renamed from post_init
+                .post_shutdown(self._post_shutdown)  # Renamed from post_shutdown
+                .build()
+            )
+            
+            self._register_handlers()
+            await self.application.initialize()  # Add this line
+            logger.info("Bot initialized successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Initialization failed: {e}")
+            return False
         
     def _register_handlers(self):
         """Register all handlers"""
@@ -68,13 +77,14 @@ class TelegramBot:
         # Error handler
         self.application.add_error_handler(self.error_handler)
 
-    async def post_init(self, application):
+        async def _post_init(self, application):  # Renamed from post_init
         """Run after bot is initialized"""
-        logger.info("Bot initialization completed")
+        logger.info("Post-init completed")
         application.bot_data['db_pool'] = self.db_pool
 
-    async def post_shutdown(self, application):
+    async def _post_shutdown(self, application):  # Renamed from post_shutdown
         """Run after bot is shutdown"""
+        logger.info("Post-shutdown cleanup started")
         if self.db_pool:
             await self.db_pool.close()
             logger.info("Database connection pool closed")
@@ -458,36 +468,51 @@ class TelegramBot:
         if update and hasattr(update, 'message'):
             await update.message.reply_text("❌ حدث خطأ غير متوقع. يرجى المحاولة لاحقاً.")
 
-    async def run(self):
+        async def run(self):
         """Run the bot application"""
-        await self.initialize()
-        await self.application.run_polling()
+        if not await self.initialize():
+            return
+
+        self.running = True
+        try:
+            await self.application.start()
+            logger.info("Bot started, beginning polling...")
+            await self.application.updater.start_polling()
+            
+            # Keep the application running
+            while self.running:
+                await asyncio.sleep(1)
+                
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Received stop signal, shutting down...")
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+        finally:
+            await self.shutdown()
+
+    async def shutdown(self):
+        """Cleanup resources"""
+        if not self.running:
+            return
+
+        self.running = False
+        try:
+            if self.application:
+                if self.application.updater and self.application.updater.running:
+                    await self.application.updater.stop()
+                await self.application.stop()
+                await self.application.shutdown()
+                logger.info("Application shutdown complete")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
 
 
-
-async def main():
-    """Main entry point"""
-    bot = TelegramBot()
-    await bot.run()
 
 if __name__ == '__main__':
     try:
-        if sys.platform.startswith('win') and sys.version_info >= (3, 8):
-            # For Windows-specific event loop policy
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-        # Check if an event loop is already running
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Run main in already running event loop
-                loop.create_task(main())
-            else:
-                asyncio.run(main())
-        except RuntimeError:
-            # If no event loop exists, create one and run
-            asyncio.run(main())
+        # Use asyncio.run() which handles event loop creation/cleanup
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error(f"Fatal error: {e}")
