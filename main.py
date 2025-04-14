@@ -1,41 +1,42 @@
+
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
-import os
 
-TOKEN = os.getenv("7355667192:AAG71GZ5n_yK64KGIXEmFfeArzQ3rDfStbU")  # اضبطه في البيئة (لا تضعه في الكود مباشرة!)
+# Configuration
+TOKEN = os.getenv("7355667192:AAG71GZ5n_yK64KGIXEmFfeArzQ3rDfStbU")
+ADMIN_CHAT_ID = "1645299005"  # To receive orders
 
-# قاعدة بيانات المنتجات (بالعربية)
+# Sample Arabic product database
 products = {
     "fig1": {
         "name": "تمثال ناروتو",
-        "price": 3000,  # دينار جزائري
+        "price": 3000,
         "desc": "حجم 15 سم، إصدار محدود",
-        "photo": "https://example.com/naruto.jpg"
+        "photo": "https://i.imgur.com/JqYeYn7.jpg"
     },
     "poster1": {
         "name": "ملصق ديمون سلاير",
         "price": 500,
         "desc": "مقاس A3، طبعة عالية الجودة",
-        "photo": "https://example.com/ds_poster.jpg"
+        "photo": "https://i.imgur.com/p6Qb6Qq.jpg"
     }
 }
 
-# طلبات الزبائن (في الذاكرة، استخدم قاعدة بيانات للإنتاج)
-orders = {}
+# Order storage (in production, use a database)
+user_carts = {}
 
-
+# ----- Bot Handlers -----
 def start(update: Update, context: CallbackContext):
     keyboard = [
         [InlineKeyboardButton("تصفح المنتجات 🛍️", callback_data="browse")],
         [InlineKeyboardButton("طلباتي 🛒", callback_data="my_orders")]
     ]
     update.message.reply_text(
-        "مرحبًا بك في *متجر الأنمي الجزائري*! 🇩🇿\n\n"
-        "يمكنك الطلب والدفع عند الاستلام.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        "مرحبًا بك في متجر الأنمي الجزائري! 🇩🇿\n\n"
+        "الدفع عند الاستلام في جميع الولايات",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
 
 def browse_products(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -47,22 +48,20 @@ def browse_products(update: Update, context: CallbackContext):
         )])
     keyboard.append([InlineKeyboardButton("العودة ↩️", callback_data="back_start")])
     query.edit_message_text(
-        "🏷️ *قائمة المنتجات*:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        "🏷️ قائمة المنتجات:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
-def product_detail(update: Update, context: CallbackContext):
+def show_product(update: Update, context: CallbackContext):
     query = update.callback_query
     product_id = query.data.split("_")[1]
     product = products[product_id]
-
+    
     keyboard = [
-        [InlineKeyboardButton("أضف إلى السلة 🛒", callback_data=f"order_{product_id}")],
+        [InlineKeyboardButton("أضف إلى السلة 🛒", callback_data=f"add_{product_id}")],
         [InlineKeyboardButton("عودة ↩️", callback_data="browse")]
     ]
-
+    
     context.bot.send_photo(
         chat_id=query.message.chat_id,
         photo=product["photo"],
@@ -72,67 +71,95 @@ def product_detail(update: Update, context: CallbackContext):
     )
     query.delete_message()
 
-
-def place_order(update: Update, context: CallbackContext):
+def add_to_cart(update: Update, context: CallbackContext):
     query = update.callback_query
     user_id = query.from_user.id
     product_id = query.data.split("_")[1]
+    
+    if user_id not in user_carts:
+        user_carts[user_id] = []
+    user_carts[user_id].append(product_id)
+    
+    query.answer(f"✅ تمت إضافة {products[product_id]['name']} إلى السلة")
 
-    if user_id not in orders:
-        orders[user_id] = []
-    orders[user_id].append(products[product_id])
-
-    # إرسال تفاصيل الطلب للمستخدم
-    order_summary = f"✅ تمت إضافة *{products[product_id]['name']}* إلى طلباتك!\n\n"
-    order_summary += "سيتم التواصل معك لتأكيد العنوان والدفع عند الاستلام."
-
-    query.answer()
-    context.bot.send_message(
-        chat_id=query.message.chat_id,
-        text=order_summary,
-        parse_mode="Markdown"
-    )
-
-
-def my_orders(update: Update, context: CallbackContext):
+def view_cart(update: Update, context: CallbackContext):
     query = update.callback_query
     user_id = query.from_user.id
-
-    if user_id not in orders or not orders[user_id]:
-        query.edit_message_text("لا توجد طلبات حالية!")
+    
+    if user_id not in user_carts or not user_carts[user_id]:
+        query.edit_message_text("سلة التسوق فارغة!")
         return
-
-    order_list = "📋 *طلباتك الحالية*:\n\n"
+    
+    items = []
     total = 0
-    for item in orders[user_id]:
-        order_list += f"・ {item['name']} - {item['price']} دج\n"
+    for product_id in user_carts[user_id]:
+        item = products[product_id]
+        items.append(f"・ {item['name']} ({item['price']} دج)")
         total += item["price"]
-
-    order_list += f"\nالمجموع: {total} دج\n\n"
-    order_list += "سيتم التواصل معك قريبًا للتوصيل."
-
-    keyboard = [[InlineKeyboardButton("إغلاق ❌", callback_data="close_orders")]]
+    
+    keyboard = [
+        [InlineKeyboardButton("تأكيد الطلب ✅", callback_data="confirm_order")],
+        [InlineKeyboardButton("حذف السلة 🗑️", callback_data="clear_cart")]
+    ]
+    
     query.edit_message_text(
-        order_list,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        f"🛒 سلة التسوق:\n\n" + "\n".join(items) + f"\n\nالمجموع: {total} دج",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+def confirm_order(update: Update, context: CallbackContext):
+    query = update.callback_query
+    user = query.from_user
+    
+    # Get user cart
+    if user.id not in user_carts:
+        query.answer("السلة فارغة!")
+        return
+    
+    # Prepare order summary
+    order_items = []
+    total = 0
+    for product_id in user_carts[user.id]:
+        item = products[product_id]
+        order_items.append(f"- {item['name']} ({item['price']} دج)")
+        total += item["price"]
+    
+    # Send to admin
+    context.bot.send_message(
+        chat_id=ADMIN_CHAT_ID,
+        text=f"🎌 طلب جديد!\n\n"
+             f"الزبون: {user.full_name} (@{user.username})\n"
+             f"الطلبات:\n" + "\n".join(order_items) + f"\n\n"
+             f"المجموع: {total} دج\n\n"
+             f"رقم التواصل: {user.id}"
+    )
+    
+    # Confirm to user
+    query.edit_message_text(
+        "شكرًا لطلبك! 🎉\n\n"
+        "سيتم التواصل معك خلال 24 ساعة لتأكيد العنوان.\n"
+        "الدفع نقدًا عند الاستلام."
+    )
+    
+    # Clear cart
+    user_carts.pop(user.id)
 
+# ----- Main Setup -----
 def main():
     updater = Updater(TOKEN)
     dp = updater.dispatcher
-
-    # الأوامر
+    
+    # Handlers
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CallbackQueryHandler(browse_products, pattern="^browse$"))
-    dp.add_handler(CallbackQueryHandler(my_orders, pattern="^my_orders$"))
-    dp.add_handler(CallbackQueryHandler(product_detail, pattern="^product_"))
-    dp.add_handler(CallbackQueryHandler(place_order, pattern="^order_"))
-
+    dp.add_handler(CallbackQueryHandler(view_cart, pattern="^my_orders$"))
+    dp.add_handler(CallbackQueryHandler(show_product, pattern="^product_"))
+    dp.add_handler(CallbackQueryHandler(add_to_cart, pattern="^add_"))
+    dp.add_handler(CallbackQueryHandler(confirm_order, pattern="^confirm_order$"))
+    
+    # Start polling
     updater.start_polling()
     updater.idle()
-
 
 if __name__ == "__main__":
     main()
