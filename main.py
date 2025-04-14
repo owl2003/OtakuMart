@@ -1,7 +1,6 @@
 import asyncpg
 import logging
 import asyncio
-import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, 
@@ -31,11 +30,11 @@ class TelegramBot:
     def __init__(self):
         self.db_pool = None
         self.application = None
-        self.running = False  # Add this line
+        self.running = False
 
     async def initialize(self):
         """Initialize the bot application"""
-        try:  # Add try-except block
+        try:
             self.db_pool = await asyncpg.create_pool(
                 DB_URL,
                 min_size=5,
@@ -46,26 +45,25 @@ class TelegramBot:
             self.application = (
                 ApplicationBuilder()
                 .token(TOKEN)
-                .post_init(self._post_init)  # Renamed from post_init
-                .post_shutdown(self._post_shutdown)  # Renamed from post_shutdown
+                .post_init(self._post_init)
+                .post_shutdown(self._post_shutdown)
                 .build()
             )
             
             self._register_handlers()
-            await self.application.initialize()  # Add this line
+            await self.application.initialize()
             logger.info("Bot initialized successfully")
             return True
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
             return False
-        
+
     def _register_handlers(self):
         """Register all handlers"""
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("admin_orders", self.admin_orders))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
         
-        # Callback handlers
         self.application.add_handler(CallbackQueryHandler(self.browse_products, pattern="^browse$"))
         self.application.add_handler(CallbackQueryHandler(self.show_product, pattern="^product_"))
         self.application.add_handler(CallbackQueryHandler(self.add_to_cart, pattern="^add_"))
@@ -74,20 +72,57 @@ class TelegramBot:
         self.application.add_handler(CallbackQueryHandler(self.clear_cart, pattern="^clear_cart$"))
         self.application.add_handler(CallbackQueryHandler(self.back_to_start, pattern="^back_start$"))
         
-        # Error handler
         self.application.add_error_handler(self.error_handler)
 
-        async def _post_init(self, application):  # Renamed from post_init
+    async def _post_init(self, application):
         """Run after bot is initialized"""
         logger.info("Post-init completed")
         application.bot_data['db_pool'] = self.db_pool
 
-    async def _post_shutdown(self, application):  # Renamed from post_shutdown
+    async def _post_shutdown(self, application):
         """Run after bot is shutdown"""
         logger.info("Post-shutdown cleanup started")
         if self.db_pool:
             await self.db_pool.close()
             logger.info("Database connection pool closed")
+
+    async def run(self):
+        """Run the bot application"""
+        if not await self.initialize():
+            return
+
+        self.running = True
+        try:
+            await self.application.start()
+            logger.info("Bot started, beginning polling...")
+            await self.application.updater.start_polling()
+            
+            # Keep the application running
+            while self.running:
+                await asyncio.sleep(1)
+                
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Received stop signal, shutting down...")
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+        finally:
+            await self.shutdown()
+
+    async def shutdown(self):
+        """Cleanup resources"""
+        if not self.running:
+            return
+
+        self.running = False
+        try:
+            if self.application:
+                if self.application.updater and self.application.updater.running:
+                    await self.application.updater.stop()
+                await self.application.stop()
+                await self.application.shutdown()
+                logger.info("Application shutdown complete")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start command handler"""
@@ -242,8 +277,7 @@ class TelegramBot:
             await query.edit_message_text(
                 f"*{product['name']}*\n\n💰 السعر: {product['price']} دج\n\n{product['description']}",
                 parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+                reply_markup=InlineKeyboardMarkup(keyboard))
 
     async def add_to_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Add product to cart"""
@@ -254,7 +288,6 @@ class TelegramBot:
 
         try:
             async with context.bot_data['db_pool'].acquire() as conn:
-                # Check if product exists
                 product_exists = await conn.fetchval(
                     "SELECT 1 FROM products WHERE id = $1",
                     product_id
@@ -263,7 +296,6 @@ class TelegramBot:
                     await query.answer("⚠️ المنتج غير متوفر")
                     return
 
-                # Add to cart
                 await conn.execute(
                     "INSERT INTO cart_items (user_id, product_id) VALUES ($1, $2)",
                     user_id, product_id
@@ -323,7 +355,6 @@ class TelegramBot:
 
         try:
             async with context.bot_data['db_pool'].acquire() as conn:
-                # Get cart items
                 cart_items = await conn.fetch(
                     """
                     SELECT p.id, p.name, p.price 
@@ -338,13 +369,11 @@ class TelegramBot:
                     await query.answer("⚠️ السلة فارغة")
                     return
 
-                # Get user info
                 user_info = await conn.fetchrow(
                     "SELECT name, phone, address FROM users WHERE telegram_id = $1",
                     user.id
                 )
 
-                # Create order
                 product_ids = [item['id'] for item in cart_items]
                 total = sum(item['price'] for item in cart_items)
                 
@@ -356,7 +385,6 @@ class TelegramBot:
                     user.id, product_ids, total
                 )
 
-                # Clear cart
                 await conn.execute(
                     "DELETE FROM cart_items WHERE user_id = $1",
                     user.id
@@ -366,7 +394,6 @@ class TelegramBot:
             await query.edit_message_text("❌ حدث خطأ أثناء تأكيد الطلب")
             return
 
-        # Prepare order summary for admin
         items_text = "\n".join(f"- {item['name']} ({item['price']} دج)" for item in cart_items)
         order_text = (
             f"📦 طلب جديد\n\n"
@@ -468,49 +495,13 @@ class TelegramBot:
         if update and hasattr(update, 'message'):
             await update.message.reply_text("❌ حدث خطأ غير متوقع. يرجى المحاولة لاحقاً.")
 
-        async def run(self):
-        """Run the bot application"""
-        if not await self.initialize():
-            return
-
-        self.running = True
-        try:
-            await self.application.start()
-            logger.info("Bot started, beginning polling...")
-            await self.application.updater.start_polling()
-            
-            # Keep the application running
-            while self.running:
-                await asyncio.sleep(1)
-                
-        except (KeyboardInterrupt, SystemExit):
-            logger.info("Received stop signal, shutting down...")
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-        finally:
-            await self.shutdown()
-
-    async def shutdown(self):
-        """Cleanup resources"""
-        if not self.running:
-            return
-
-        self.running = False
-        try:
-            if self.application:
-                if self.application.updater and self.application.updater.running:
-                    await self.application.updater.stop()
-                await self.application.stop()
-                await self.application.shutdown()
-                logger.info("Application shutdown complete")
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
-
-
+async def main():
+    """Main entry point"""
+    bot = TelegramBot()
+    await bot.run()
 
 if __name__ == '__main__':
     try:
-        # Use asyncio.run() which handles event loop creation/cleanup
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
